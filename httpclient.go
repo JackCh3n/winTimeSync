@@ -1,0 +1,124 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// httpTimeResponse 是 HTTP 时间服务器返回的 JSON 结构（兼容多种字段）。
+type httpTimeResponse struct {
+	Time   string `json:"time"`   // RFC3339 格式，如 2026-07-06T17:40:59.123Z
+	Unix   int64  `json:"unix"`   // 秒级时间戳
+	UnixMs int64  `json:"unixMs"` // 毫秒级时间戳
+}
+
+// queryHTTPTime 请求内网 HTTP 时间服务器，测量往返耗时(RTT)，估算时间偏移并校准。
+// 通过 t0(发请求前) / t3(收响应后) 与服务器返回的时间，按 (serverTime + RTT/2) 估算服务端当前时间。
+func queryHTTPTime(url string, timeout time.Duration, client *http.Client) (corrected time.Time, offset, delay time.Duration, err error) {
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+	if client == nil {
+		client = &http.Client{Timeout: timeout}
+	}
+
+	t0 := time.Now()
+	resp, err := client.Get(url)
+	if err != nil {
+		return time.Time{}, 0, 0, fmt.Errorf("请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return time.Time{}, 0, 0, fmt.Errorf("读取响应失败: %w", err)
+	}
+	t3 := time.Now()
+
+	var r httpTimeResponse
+	raw := strings.TrimSpace(string(body))
+	if jsonErr := json.Unmarshal([]byte(raw), &r); jsonErr != nil {
+		// 退化解析：把整个 body 当作 RFC3339 或 Unix 时间戳
+		if ts, perr := time.Parse(time.RFC3339Nano, raw); perr == nil {
+			r.Time = ts.UTC().Format(time.RFC3339Nano)
+		} else if u, perr := strconv.ParseInt(raw, 10, 64); perr == nil {
+			if u > 1e12 { // 毫秒
+				r.UnixMs = u
+			} else { // 秒
+				r.Unix = u
+			}
+		} else {
+			return time.Time{}, 0, 0, fmt.Errorf("无法解析时间响应: %q", raw)
+		}
+	}
+
+	var serverTime time.Time
+	switch {
+	case r.Unix > 0:
+		serverTime = time.Unix(r.Unix, 0).UTC()
+	case r.UnixMs > 0:
+		serverTime = time.Unix(r.UnixMs/1000, (r.UnixMs%1000)*int64(time.Millisecond)).UTC()
+	case r.Time != "":
+		serverTime, err = time.Parse(time.RFC3339Nano, r.Time)
+		if err != nil {
+			return time.Time{}, 0, 0, fmt.Errorf("解析 time 字段失败: %w", err)
+		}
+	default:
+		return time.Time{}, 0, 0, fmt.Errorf("响应中未找到时间字段")
+	}
+
+	rtt := t3.Sub(t0)
+	// 假设网络对称，服务端在 t3 时刻的时间 ≈ serverTime + rtt/2
+	offset = serverTime.Add(rtt / 2).Sub(t3)
+	corrected = t3.Add(offset)
+	delay = rtt
+
+	return corrected, offset, delay, nil
+}
+
+// startTimeServer 启动一个 HTTP 时间服务器，供内网其它机器作为时间源。
+// 若 selfSyncNTP 为真，则后台定期用 NTP 校准本机时钟，使对外提供的时间更准确。
+func startTimeServer(addr string, selfSyncNTP bool, ntpServer string, interval time.Duration) error {
+	if selfSyncNTP {
+		go func() {
+			if interval <= 0 {
+				interval = time.Hour
+			}
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			// 启动即先校准一次
+			if corrected, off, _, err := queryNTP(ntpServer, 5*time.Second); err == nil {
+				_ = setSystemTime(corrected)
+				logf("server: 自身已用 NTP 校准, 偏移=%s", off.Round(time.Millisecond))
+			}
+			for range ticker.C {
+				if corrected, off, _, err := queryNTP(ntpServer, 5*time.Second); err == nil {
+					_ = setSystemTime(corrected)
+					logf("server: 周期 NTP 校准完成, 偏移=%s", off.Round(time.Millisecond))
+				}
+			}
+		}()
+	}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/time", func(w http.ResponseWriter, r *http.Request) {
+		now := time.Now().UTC()
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"time":   now.Format(time.RFC3339Nano),
+			"unix":   now.Unix(),
+			"unixMs": now.UnixNano() / int64(time.Millisecond),
+		})
+	})
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	logf("HTTP 时间服务器已启动: http://%s/time", addr)
+	return http.ListenAndServe(addr, mux)
+}

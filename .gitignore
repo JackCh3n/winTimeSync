@@ -1,0 +1,11 @@
+# 编译产物
+winTimeSync
+winTimeSync.exe
+
+# Go 构建缓存
+*.test
+*.out
+
+# 操作系统
+Thumbs.db
+.DS_Store
