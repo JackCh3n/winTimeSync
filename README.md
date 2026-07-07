@@ -37,7 +37,8 @@ winTimeSync version                  查看版本
 
 | 参数 | 说明 | 默认 |
 |------|------|------|
-| `-source` | 时间源：`ntp` \| `http` | `ntp` |
+| `-source` | 单源模式时间源：`ntp` \| `http`（未指定 `-chain` 时生效） | `ntp` |
+| `-chain` | 主备链：按顺序尝试，逗号分隔，每项 `ntp:地址` 或 `http:地址` | 空（用 `-source`） |
 | `-ntp-server` | NTP 服务器地址（source=ntp 时生效） | `pool.ntp.org:123` |
 | `-http-url` | HTTP 时间服务器地址（source=http 时生效） | `http://127.0.0.1:8080/time` |
 | `-interval` | 同步间隔（秒），run 模式生效 | `3600` |
@@ -50,10 +51,10 @@ server 模式参数：`-server-addr`（监听地址，默认 `:8080`）、`-serv
 ### 示例
 
 ```bash
-# NTP，每 10 分钟同步一次
+# NTP，每 10 分钟同步一次（单源模式）
 winTimeSync.exe run -source ntp -interval 600
 
-# 内网 HTTP 时间源，每 60 秒同步
+# 内网 HTTP 时间源，每 60 秒同步（单源模式）
 winTimeSync.exe run -source http -http-url http://127.0.0.1:8080/time -interval 60
 
 # 只检查偏差不改系统时间
@@ -68,15 +69,34 @@ winTimeSync.exe status
 winTimeSync.exe uninstall
 ```
 
+## 主备模式（failover）
+
+使用 `-chain` 可指定**按顺序尝试**的时间源列表，某项失败自动切换到下一项，直到成功或全部失败。每项格式为 `ntp:地址` 或 `http:地址`，用英文逗号分隔。
+
+```bash
+# 主用 NTP，备用 HTTP
+winTimeSync.exe run -chain "ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time" -interval 60
+
+# 主用 NTP A，备用 NTP B，备用 NTP C
+winTimeSync.exe run -chain "ntp:time1.aliyun.com:123,ntp:time2.aliyun.com:123,ntp:time.windows.com:123" -interval 300
+
+# 开机启动也支持主备链（安装时的参数会原样带入开机任务）
+winTimeSync.exe install -chain "ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time" -interval 60
+```
+
+> 未指定 `-chain` 时回退到旧的 `-source` 单源模式，保持向后兼容。
+
 ## HTTP 时间接口约定
 
-`source=http` 时，工具向 `-http-url` 发起 GET 请求，支持以下响应格式：
+`source=http`（或 `-chain` 中的 `http:` 项）时，工具向目标地址发起 GET 请求，按以下优先级取时间：
 
-- JSON：`{"time":"2026-07-06T17:40:59.123Z","unix":1783331459,"unixMs":1783331459123}`
-- 纯 RFC3339 字符串：`2026-07-06T17:40:59.123Z`
-- 纯 Unix 时间戳（秒或毫秒）
+1. **响应头 `Date`**（优先）：兼容普通 Web 服务器，如 nginx 返回的 `Date: Tue, 07 Jul 2026 02:41:52 GMT`。
+2. **响应体**，支持以下格式：
+   - JSON：`{"time":"2026-07-06T17:40:59.123Z","unix":1783331459,"unixMs":1783331459123}`
+   - 纯 RFC3339 字符串：`2026-07-06T17:40:59.123Z`
+   - 纯 Unix 时间戳（秒或毫秒）
 
-内置 `server` 模式返回上述 JSON（路径 `/time`），可直接作为内网时间源使用。
+内置 `server` 模式返回上述 JSON（路径 `/time`），可直接作为内网时间源使用。借助 `Date` 头兼容，任意正常 Web 站点（如 `http://127.0.0.1:8080/time`）也能作为粗略时间源。
 
 ## 修改运行参数
 

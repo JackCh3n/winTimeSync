@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 )
 
 const taskName = "WinTimeSync"
@@ -30,8 +31,17 @@ func installStartup() error {
 	// /sc onstart : 系统启动时触发
 	// /ru SYSTEM  : 以 SYSTEM 账户运行（无需登录用户）
 	// /rl HIGHEST : 最高权限
-	// /tr         : 运行的命令 "exe run"
-	tr := fmt.Sprintf("\"%s\" run", exe)
+	// /tr         : 运行的命令 "exe run <安装时的参数>"
+	// 把 install 后面的参数原样传给 run，使开机任务复现当前的主备链/间隔等配置
+	runArgs := os.Args[2:]
+	quoted := make([]string, 0, len(runArgs))
+	for _, a := range runArgs {
+		if strings.ContainsAny(a, " \t") {
+			a = "\"" + a + "\""
+		}
+		quoted = append(quoted, a)
+	}
+	tr := fmt.Sprintf("\"%s\" run %s", exe, strings.Join(quoted, " "))
 	cmd := exec.Command("schtasks", "/create",
 		"/sc", "onstart",
 		"/tn", taskName,
@@ -44,7 +54,7 @@ func installStartup() error {
 	if err != nil {
 		return fmt.Errorf("创建计划任务失败: %v\n%s", err, string(out))
 	}
-	fmt.Printf("已注册开机启动计划任务 [%s]，将以 SYSTEM 身份在系统启动时运行: %s\n", taskName, exe)
+	fmt.Printf("已注册开机启动计划任务 [%s]，将以 SYSTEM 身份在系统启动时运行:\n  %s\n", taskName, tr)
 	return nil
 }
 

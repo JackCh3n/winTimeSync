@@ -4,11 +4,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 )
 
 var (
-	source     = flag.String("source", "ntp", "时间源: ntp | http")
+	source     = flag.String("source", "ntp", "时间源: ntp | http（未指定 -chain 时生效）")
+	chain      = flag.String("chain", "", "主备链：按顺序尝试，用逗号分隔。每项格式 ntp:地址 或 http:地址。例: ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time")
 	ntpServer  = flag.String("ntp-server", "pool.ntp.org:123", "NTP 服务器地址 (source=ntp 时生效)")
 	httpURL    = flag.String("http-url", "http://127.0.0.1:8080/time", "HTTP 时间服务器地址 (source=http 时生效)")
 	interval   = flag.Int("interval", 3600, "同步间隔（秒），run 模式生效")
@@ -18,6 +20,53 @@ var (
 	serverNTP  = flag.Bool("server-ntp", true, "server 模式下是否后台用 NTP 校准本机时钟")
 	quiet      = flag.Bool("quiet", false, "安静模式，仅输出错误")
 )
+
+// timeSource 表示主备链中的一个时间源。
+type timeSource struct {
+	kind   string // "ntp" 或 "http"
+	target string // NTP 地址 或 HTTP URL
+	label  string // 日志用标识
+}
+
+// buildChain 解析出本次同步要尝试的时间源顺序。
+// 若指定了 -chain 则按其顺序；否则回退到旧的 -source 单源模式（保持向后兼容）。
+func buildChain() ([]timeSource, error) {
+	if *chain != "" {
+		var out []timeSource
+		for _, part := range strings.Split(*chain, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			i := strings.Index(part, ":")
+			if i <= 0 {
+				return nil, fmt.Errorf("无法解析源: %q（格式应为 ntp:地址 或 http:地址）", part)
+			}
+			kind, target := part[:i], part[i+1:]
+			switch kind {
+			case "ntp":
+				out = append(out, timeSource{kind: "ntp", target: target, label: "ntp:" + target})
+			case "http":
+				out = append(out, timeSource{kind: "http", target: target, label: "http:" + target})
+			default:
+				return nil, fmt.Errorf("未知源类型: %q（支持 ntp: / http:）", kind)
+			}
+		}
+		if len(out) == 0 {
+			return nil, fmt.Errorf("-chain 为空或无法解析")
+		}
+		return out, nil
+	}
+	// 旧模式：单一 -source
+	switch *source {
+	case "ntp":
+		return []timeSource{{kind: "ntp", target: *ntpServer, label: "ntp:" + *ntpServer}}, nil
+	case "http":
+		return []timeSource{{kind: "http", target: *httpURL, label: "http:" + *httpURL}}, nil
+	default:
+		return nil, fmt.Errorf("未知时间源: %s（支持 ntp | http）", *source)
+	}
+}
 
 func logf(format string, args ...interface{}) {
 	if !*quiet {
@@ -74,7 +123,17 @@ func main() {
 }
 
 func runLoop() {
-	logf("winTimeSync 启动 | 时间源=%s | 间隔=%d秒 | 检查模式=%v", *source, *interval, *check)
+	chain, err := buildChain()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "配置错误: %v\n", err)
+		os.Exit(1)
+	}
+	labels := make([]string, len(chain))
+	for i, s := range chain {
+		labels[i] = s.label
+	}
+	logf("winTimeSync 启动 | 主备链=[%s] | 间隔=%d秒 | 检查模式=%v",
+		strings.Join(labels, " > "), *interval, *check)
 	if *interval < 1 {
 		*interval = 1
 	}
@@ -92,51 +151,55 @@ func runLoop() {
 	}
 }
 
-// doSync 执行一次同步（NTP 或 HTTP），并按需设置系统时间。
+// doSync 按主备链顺序尝试各时间源，首个成功者用于校准系统时间。
 func doSync() error {
 	timeout := time.Duration(*timeoutSec) * time.Second
 
-	var (
-		corrected time.Time
-		offset    time.Duration
-		delay     time.Duration
-		err       error
-	)
-
-	switch *source {
-	case "ntp":
-		corrected, offset, delay, err = queryNTP(*ntpServer, timeout)
-		if err != nil {
-			return fmt.Errorf("NTP 查询 %s 失败: %w", *ntpServer, err)
-		}
-	case "http":
-		corrected, offset, delay, err = queryHTTPTime(*httpURL, timeout, nil)
-		if err != nil {
-			return fmt.Errorf("HTTP 时间查询 %s 失败: %w", *httpURL, err)
-		}
-	default:
-		return fmt.Errorf("未知时间源: %s（支持 ntp | http）", *source)
+	chain, err := buildChain()
+	if err != nil {
+		return err
 	}
 
-	now := time.Now()
-	logf("[%s] 源=%s 偏移=%s 延时=%s 校准后=%s",
-		now.Format("2006-01-02 15:04:05"),
-		*source,
-		offset.Round(time.Millisecond),
-		delay.Round(time.Millisecond),
-		corrected.Format("2006-01-02 15:04:05.000 MST"),
-	)
-
-	if *check {
-		logf("仅检查模式，未修改系统时间")
+	var lastErr error
+	for _, s := range chain {
+		var (
+			corrected time.Time
+			offset    time.Duration
+			delay     time.Duration
+		)
+		switch s.kind {
+		case "ntp":
+			corrected, offset, delay, err = queryNTP(s.target, timeout)
+		case "http":
+			corrected, offset, delay, err = queryHTTPTime(s.target, timeout, nil)
+		default:
+			err = fmt.Errorf("未知源类型: %s", s.kind)
+		}
+		if err != nil {
+			lastErr = err
+			logf("源 %s 失败: %v，尝试下一个", s.label, err)
+			continue
+		}
+		// 成功
+		now := time.Now()
+		logf("[%s] 命中源=%s 偏移=%s 延时=%s 校准后=%s",
+			now.Format("2006-01-02 15:04:05"),
+			s.label,
+			offset.Round(time.Millisecond),
+			delay.Round(time.Millisecond),
+			corrected.Format("2006-01-02 15:04:05.000 MST"),
+		)
+		if *check {
+			logf("仅检查模式，未修改系统时间")
+			return nil
+		}
+		if err := setSystemTime(corrected); err != nil {
+			return fmt.Errorf("设置系统时间失败: %w", err)
+		}
+		logf("已同步系统时间 -> %s", corrected.Format("2006-01-02 15:04:05 MST"))
 		return nil
 	}
-
-	if err := setSystemTime(corrected); err != nil {
-		return fmt.Errorf("设置系统时间失败: %w", err)
-	}
-	logf("已同步系统时间 -> %s", corrected.Format("2006-01-02 15:04:05 MST"))
-	return nil
+	return fmt.Errorf("所有时间源均失败，最后错误: %w", lastErr)
 }
 
 func printUsage() {
@@ -152,7 +215,8 @@ func printUsage() {
   winTimeSync version                  查看版本
 
 通用参数:
-  -source string       时间源: ntp | http（默认 ntp）
+  -source string       单源模式时间源: ntp | http（未指定 -chain 时生效，默认 ntp）
+  -chain string        主备链：按顺序尝试，逗号分隔。每项 ntp:地址 或 http:地址
   -ntp-server string   NTP 服务器（默认 pool.ntp.org:123）
   -http-url string     HTTP 时间地址（默认 http://127.0.0.1:8080/time）
   -interval int        同步间隔秒数（默认 3600）
@@ -165,10 +229,18 @@ server 模式参数:
   -server-ntp bool     后台用 NTP 校准本机时钟（默认 true）
 
 示例:
+  # 单源
   winTimeSync run -source ntp -interval 600
   winTimeSync run -source http -http-url http://192.168.1.10:8080/time -interval 60
-  winTimeSync once -source ntp -check
+
+  # 主备：主用 NTP，备用 HTTP
+  winTimeSync run -chain "ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time" -interval 60
+
+  # 主备：NTP A 主，NTP B/C 备
+  winTimeSync run -chain "ntp:time1.aliyun.com:123,ntp:time2.aliyun.com:123,ntp:time.windows.com:123" -interval 300
+
+  winTimeSync once -chain "ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time" -check
   winTimeSync server -server-addr :8080
-  winTimeSync install   （请以管理员身份运行）
+  winTimeSync install -chain "ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time" -interval 60   （请以管理员身份运行）
 `)
 }
