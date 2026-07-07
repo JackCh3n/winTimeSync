@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>winTimeSync · 轻量级 Windows 时间同步工具</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --bg-soft: #161a23;
+    --card: #1c2230;
+    --line: #2a3142;
+    --text: #e7ecf3;
+    --muted: #9aa6b8;
+    --brand: #4f8cff;
+    --brand2: #38d39f;
+    --accent: #ffb454;
+    --code: #0b0e14;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Microsoft YaHei", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: var(--brand); text-decoration: none; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+  /* Hero */
+  header.hero {
+    position: relative;
+    padding: 96px 0 80px;
+    background:
+      radial-gradient(1200px 500px at 15% -10%, rgba(79,140,255,.22), transparent 60%),
+      radial-gradient(900px 460px at 95% 0%, rgba(56,211,159,.16), transparent 55%),
+      var(--bg-soft);
+    border-bottom: 1px solid var(--line);
+    overflow: hidden;
+  }
+  .badge {
+    display: inline-block;
+    font-size: 13px;
+    letter-spacing: .5px;
+    color: var(--brand2);
+    background: rgba(56,211,159,.1);
+    border: 1px solid rgba(56,211,159,.3);
+    padding: 4px 12px;
+    border-radius: 999px;
+    margin-bottom: 22px;
+  }
+  h1.title {
+    font-size: clamp(34px, 6vw, 60px);
+    font-weight: 800;
+    letter-spacing: -1px;
+    line-height: 1.1;
+    background: linear-gradient(90deg, #fff 10%, var(--brand) 60%, var(--brand2) 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .subtitle { margin-top: 18px; font-size: 19px; color: var(--muted); max-width: 720px; }
+  .hero-actions { margin-top: 34px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 12px 22px; border-radius: 10px; font-weight: 600; font-size: 15px;
+    cursor: pointer; transition: .2s transform, .2s box-shadow, .2s background;
+  }
+  .btn-primary { background: var(--brand); color: #fff; box-shadow: 0 8px 24px rgba(79,140,255,.35); }
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 12px 30px rgba(79,140,255,.5); }
+  .btn-ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  .btn-ghost:hover { border-color: var(--brand); color: var(--brand); }
+
+  .meta-row { margin-top: 30px; display: flex; gap: 28px; flex-wrap: wrap; color: var(--muted); font-size: 14px; }
+  .meta-row b { color: var(--text); font-weight: 700; }
+
+  /* Sections */
+  section { padding: 70px 0; border-bottom: 1px solid var(--line); }
+  .sec-head { margin-bottom: 40px; }
+  .sec-head h2 { font-size: 30px; font-weight: 800; letter-spacing: -.5px; }
+  .sec-head p { margin-top: 10px; color: var(--muted); max-width: 680px; }
+
+  /* Feature grid */
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 24px; transition: .2s transform, .2s border-color;
+  }
+  .card:hover { transform: translateY(-4px); border-color: var(--brand); }
+  .card .ic { font-size: 26px; margin-bottom: 14px; }
+  .card h3 { font-size: 18px; margin-bottom: 8px; }
+  .card p { color: var(--muted); font-size: 14.5px; }
+
+  /* Code */
+  .code {
+    background: var(--code); border: 1px solid var(--line); border-radius: 12px;
+    padding: 18px 20px; overflow-x: auto; font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-size: 13.5px; color: #cdd6e4; line-height: 1.7;
+  }
+  .code .c { color: #5f6b80; }
+  .code .k { color: #ff9d72; }
+  .code .s { color: #9ce0a5; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  @media (max-width: 760px) { .two-col { grid-template-columns: 1fr; } }
+
+  /* Topology */
+  .topo { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 26px; }
+  .topo svg { width: 100%; height: auto; display: block; }
+  .topo .legend { margin-top: 16px; color: var(--muted); font-size: 14px; }
+
+  /* Steps */
+  .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px,1fr)); gap: 18px; }
+  .step { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; }
+  .step .num { width: 30px; height: 30px; border-radius: 50%; background: var(--brand); color: #fff;
+    display: grid; place-items: center; font-weight: 700; margin-bottom: 12px; }
+  .step h4 { margin-bottom: 6px; }
+  .step p { color: var(--muted); font-size: 14px; }
+
+  /* Footer */
+  footer { padding: 50px 0; text-align: center; color: var(--muted); }
+  .made { display: inline-flex; align-items: center; gap: 10px; margin-top: 6px;
+    padding: 10px 18px; border-radius: 999px; border: 1px solid var(--line); background: var(--bg-soft); }
+  .made .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--brand2); box-shadow: 0 0 10px var(--brand2); }
+  .made b { color: var(--text); }
+  .made .nm { color: var(--brand); font-weight: 700; letter-spacing: .5px; }
+  .disclaimer { font-size: 13px; color: #6b7588; margin-top: 18px; }
+
+  /* table */
+  table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14.5px; }
+  th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 600; }
+  td code { background: var(--code); padding: 2px 7px; border-radius: 6px; color: #9ce0a5; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <span class="badge">⚡ 零依赖 · 单文件 exe · Windows 专用</span>
+    <h1 class="title">winTimeSync</h1>
+    <p class="subtitle">
+      一个用 Go 写的轻量级 Windows 时间同步工具：兼容标准 <b>NTP 协议</b>，
+      也支持通过<b>内网 HTTP 地址</b>按服务端时间校准；可配置同步间隔、主备时间源，
+      还能把本机一键变成 <b>NTP + HTTP 双协议</b>时间源，并<b>开机自动运行</b>。
+    </p>
+    <div class="hero-actions">
+      <a class="btn btn-primary" href="#features">查看功能</a>
+      <a class="btn btn-ghost" href="#topo">A↔B 拓扑演示</a>
+      <a class="btn btn-ghost" href="#cmd">命令速查</a>
+    </div>
+    <div class="meta-row">
+      <div><b>双协议</b> · NTP / 内网 HTTP</div>
+      <div><b>主备链</b> · 自动故障转移</div>
+      <div><b>开机启动</b> · 系统级计划任务</div>
+      <div><b>中文向导</b> · config.bat</div>
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>核心功能</h2>
+      <p>面向区县基础运维场景设计，无需记复杂命令，区县人员也能轻松上手。</p>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <div class="ic">🕰️</div>
+        <h3>标准 NTP 客户端</h3>
+        <p>遵循 RFC5905，用 4 时间戳计算 offset/delay，毫秒级校准精度。可指定任意 NTP 服务器。</p>
+      </div>
+      <div class="card">
+        <div class="ic">🌐</div>
+        <h3>内网 HTTP 时间源</h3>
+        <p>支持 JSON / RFC3339 / Unix 时间戳，并兼容普通 Web 服务器的 <code>Date</code> 响应头（如 nginx）。</p>
+      </div>
+      <div class="card">
+        <div class="ic">🔁</div>
+        <h3>主备链 -chain</h3>
+        <p>按顺序尝试多个时间源，某项失败自动切换：主 NTP + 备 HTTP，或多 NTP 主备轮换。</p>
+      </div>
+      <div class="card">
+        <div class="ic">🚀</div>
+        <h3>开机自动启动</h3>
+        <p>通过 schtasks 注册系统级 onstart 计划任务（SYSTEM 账户），无需登录用户即可运行。</p>
+      </div>
+      <div class="card">
+        <div class="ic">🧩</div>
+        <h3>双协议时间源（server）</h3>
+        <p>本机可同时充当 NTP（UDP 123）与 HTTP（/time）时间源，并后台自校准，供内网其它机器同步。</p>
+      </div>
+      <div class="card">
+        <div class="ic">🗣️</div>
+        <h3>中文配置向导</h3>
+        <p>内置 config.bat，双击后全中文提示选择运行方式与时间源，自动生成并注册开机任务。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="topo">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>A↔B 拓扑：一台既当源又同步上游</h2>
+      <p>
+        软件 A 以 <code>server</code> 模式运行 —— 对内提供 NTP(UDP) + HTTP 时间，后台用 NTP 自校准本机时钟；
+        软件 B 用标准 NTP（或 HTTP）直接同步 A。完整闭环，无需外网也能构建内网时间基准。
+      </p>
+    </div>
+    <div class="topo">
+      <svg viewBox="0 0 820 320" role="img" aria-label="A 与 B 时间同步拓扑">
+        <defs>
+          <marker id="arr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+            <path d="M0,0 L8,3 L0,6 Z" fill="#4f8cff" />
+          </marker>
+          <marker id="arr2" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+            <path d="M0,0 L8,3 L0,6 Z" fill="#38d39f" />
+          </marker>
+          <linearGradient id="ag" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" stop-color="#4f8cff" />
+            <stop offset="1" stop-color="#38d39f" />
+          </linearGradient>
+        </defs>
+
+        <!-- A node -->
+        <rect x="60" y="70" width="260" height="180" rx="16" fill="#161a23" stroke="url(#ag)" stroke-width="2" />
+        <text x="190" y="104" text-anchor="middle" fill="#fff" font-size="20" font-weight="700">软件 A（时间源）</text>
+        <text x="190" y="132" text-anchor="middle" fill="#9aa6b8" font-size="13">server 模式</text>
+        <rect x="82" y="148" width="216" height="30" rx="8" fill="#1c2230" stroke="#2a3142" />
+        <text x="190" y="168" text-anchor="middle" fill="#9ce0a5" font-size="12.5">🟢 NTP 服务端 (UDP 123)</text>
+        <rect x="82" y="186" width="216" height="30" rx="8" fill="#1c2230" stroke="#2a3142" />
+        <text x="190" y="206" text-anchor="middle" fill="#9ce0a5" font-size="12.5">🟢 HTTP 服务端 (/time)</text>
+        <rect x="82" y="224" width="216" height="14" rx="6" fill="#0b0e14" />
+        <text x="190" y="235" text-anchor="middle" fill="#ffb454" font-size="11">↻ 后台 NTP 自校准本机时钟</text>
+
+        <!-- B node -->
+        <rect x="500" y="70" width="260" height="180" rx="16" fill="#161a23" stroke="#2a3142" stroke-width="2" />
+        <text x="630" y="104" text-anchor="middle" fill="#fff" font-size="20" font-weight="700">软件 B（客户端）</text>
+        <text x="630" y="132" text-anchor="middle" fill="#9aa6b8" font-size="13">run / once 模式</text>
+        <rect x="522" y="148" width="216" height="30" rx="8" fill="#1c2230" stroke="#2a3142" />
+        <text x="630" y="168" text-anchor="middle" fill="#9ce0a5" font-size="12.5">🔵 同步源: ntp:A</text>
+        <rect x="522" y="186" width="216" height="30" rx="8" fill="#1c2230" stroke="#2a3142" />
+        <text x="630" y="206" text-anchor="middle" fill="#9ce0a5" font-size="12.5">🔵 或 http://A/time</text>
+        <rect x="522" y="224" width="216" height="14" rx="6" fill="#0b0e14" />
+        <text x="630" y="235" text-anchor="middle" fill="#9aa6b8" font-size="11">按 -interval 周期校准系统时间</text>
+
+        <!-- upstream NTP -->
+        <circle cx="190" cy="286" r="26" fill="#1c2230" stroke="#4f8cff" stroke-width="2" />
+        <text x="190" y="291" text-anchor="middle" fill="#4f8cff" font-size="12">外网</text>
+        <text x="190" y="318" text-anchor="middle" fill="#9aa6b8" font-size="11">上游 NTP (pool.ntp.org)</text>
+
+        <!-- arrows A -> upstream -->
+        <line x1="190" y1="250" x2="190" y2="260" stroke="#4f8cff" stroke-width="2" marker-end="url(#arr)" />
+        <!-- arrows B -> A (NTP) -->
+        <line x1="500" y1="150" x2="320" y2="150" stroke="#38d39f" stroke-width="2.5" marker-end="url(#arr2)" />
+        <text x="410" y="142" text-anchor="middle" fill="#38d39f" font-size="12">NTP 同步</text>
+        <!-- arrows B -> A (HTTP) -->
+        <line x1="500" y1="200" x2="320" y2="200" stroke="#ffb454" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arr2)" />
+        <text x="410" y="220" text-anchor="middle" fill="#ffb454" font-size="12">HTTP /time 同步</text>
+      </svg>
+      <div class="legend">
+        💡 实测：A 启动时 <code>winTimeSync.exe server -server-addr :18090 -server-ntp-port 123 -server-ntp=false</code>，
+        B 用 <code>winTimeSync.exe once -source ntp -ntp-server &lt;A的IP&gt;:123 -check</code> 即命中 <code>ntp:A</code>，偏移 ≈ 0ms。
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="cmd">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>命令速查</h2>
+      <p>所有写系统时间与 install 注册开机任务都需<strong>以管理员身份</strong>运行。</p>
+    </div>
+
+    <div class="two-col">
+      <div>
+        <h3 style="margin-bottom:12px;">常用命令</h3>
+        <div class="code">
+<span class="c"># NTP，每 10 分钟同步</span>
+winTimeSync.exe <span class="k">run</span> -source ntp -interval 600
+
+<span class="c"># 内网 HTTP 源，每 60 秒同步</span>
+winTimeSync.exe <span class="k">run</span> -source http \
+  -http-url http://127.0.0.1:8080/time -interval 60
+
+<span class="c"># 主用 NTP，备用 HTTP</span>
+winTimeSync.exe <span class="k">run</span> -chain \
+  <span class="s">"ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time"</span> -interval 60
+
+<span class="c"># 只检查偏差不改时间</span>
+winTimeSync.exe <span class="k">once</span> -source ntp -check
+        </div>
+      </div>
+      <div>
+        <h3 style="margin-bottom:12px;">双协议时间源 & 开机启动</h3>
+        <div class="code">
+<span class="c"># A：同时提供 NTP + HTTP（需管理员）</span>
+winTimeSync.exe <span class="k">server</span> -server-addr :8080 \
+  -server-ntp-port 123 -server-ntp=true
+
+<span class="c"># nginx 直接提供 /time（无需本软件）</span>
+<span class="c"># location = /time {</span>
+<span class="c">#   return 200 '{"time":"$time_iso8601"}';</span>
+<span class="c"># }</span>
+
+<span class="c"># 注册 / 查看 / 移除 开机启动</span>
+winTimeSync.exe <span class="k">install</span> -chain \
+  <span class="s">"ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time"</span> -interval 60
+winTimeSync.exe <span class="k">status</span>
+winTimeSync.exe <span class="k">uninstall</span>
+        </div>
+      </div>
+    </div>
+
+    <h3 style="margin:36px 0 10px;">参数说明</h3>
+    <table>
+      <thead><tr><th>参数</th><th>说明</th><th>默认</th></tr></thead>
+      <tbody>
+        <tr><td><code>-source</code></td><td>时间源：ntp | http</td><td>ntp</td></tr>
+        <tr><td><code>-chain</code></td><td>主备链，逗号分隔；项格式 ntp:地址 / http:地址</td><td>空</td></tr>
+        <tr><td><code>-ntp-server</code></td><td>NTP 服务器地址</td><td>pool.ntp.org:123</td></tr>
+        <tr><td><code>-http-url</code></td><td>HTTP 时间地址（默认内网）</td><td>http://127.0.0.1:8080/time</td></tr>
+        <tr><td><code>-interval</code></td><td>同步间隔（秒），run 模式生效</td><td>3600</td></tr>
+        <tr><td><code>-timeout</code></td><td>单次请求超时（秒）</td><td>5</td></tr>
+        <tr><td><code>-check</code></td><td>仅检查偏差，不修改系统时间</td><td>false</td></tr>
+        <tr><td><code>-server-ntp-port</code></td><td>server 模式 NTP 监听端口</td><td>123</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap">
+    <div class="sec-head">
+      <h2>三步上手</h2>
+    </div>
+    <div class="steps">
+      <div class="step">
+        <div class="num">1</div>
+        <h4>编译 / 取 exe</h4>
+        <p>进入项目目录执行 <code>go build -o winTimeSync.exe .</code>，得到单文件可执行程序。</p>
+      </div>
+      <div class="step">
+        <div class="num">2</div>
+        <h4>中文向导配置</h4>
+        <p>双击 <code>config.bat</code>（建议管理员），按中文提示选运行方式与时间源。</p>
+      </div>
+      <div class="step">
+        <div class="num">3</div>
+        <h4>注册开机启动</h4>
+        <p>向导里选"注册开机启动"，系统级计划任务即生效，重启后自动同步。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="made">
+    <span class="dot"></span>
+    <span>本软件页面由</span>
+    <span class="nm">Hy3</span>
+    <span>亲手打造 ·</span>
+    <b>winTimeSync v1.0</b>
+  </div>
+  <p class="disclaimer">
+    本工具仅用于内网时间校准与运维辅助。设置系统时间与注册开机任务需管理员权限；NTP 服务端默认占用 UDP 123 特权端口，若被系统 w32time 占用请改用其它端口或先停止该服务。
+  </p>
+</footer>
+
+</body>
+</html>
