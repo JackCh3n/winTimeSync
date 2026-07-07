@@ -9,6 +9,7 @@
 - **NTP 客户端**：依据 RFC5905 用 4 个时间戳（t0/t1/t2/t3）计算时间偏移与网络延时，毫秒级校准。
 - **内网 HTTP 时间源**：请求内网地址，按 `RTT/2` 估算偏移并校准系统时间。
 - **内置 HTTP 时间服务器**（`server` 模式）：把本机变成内网时间源，对外提供 `/time` 接口（可选后台用 NTP 自校准）。
+- **内置 NTP 服务器**（`server` 模式，UDP 123）：`server` 模式可同时启动 NTP 服务端与 HTTP 服务端，使本机**同时充当 NTP + HTTP 双协议时间源**，对内网其它机器提供时间（需管理员，且 123 端口未被占用）。
 - **定时同步**：`-interval` 指定秒数，循环执行。
 - **只读检查**：`-check` 只打印偏差，不修改系统时间。
 - **开机启动**：`install` 注册系统级计划任务（SYSTEM 账户，无需登录用户即运行）。
@@ -127,6 +128,28 @@ winTimeSync.exe install -chain "ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/
   重载配置：`nginx -s reload`。随后使用 `winTimeSync.exe run -source http -http-url http://<服务器IP>:8888/time -interval 60` 即可。
 
 > 说明：nginx 内置变量 `$msec` 可返回带毫秒的浮点时间（如 `1783331459.123`），但工具的 `unix` 字段要求整数，故示例只用 `$time_iso8601`（RFC3339 字符串）。若只需整秒精度，最简方案的 `Date` 头已足够。
+
+### 让本机同时充当 NTP + HTTP 时间源（server 模式）
+
+`server` 模式默认**同时**启动两个服务：
+
+- **NTP 服务端**（UDP，默认端口 `123`）：按 RFC5905 应答 mode=3 客户端请求，报文时间戳取自本机系统时间。任何标准 NTP 客户端（含本工具的 `-source ntp`、Windows `w32tm`、Linux `chrony/ntpd`）都能直接同步到本机。
+- **HTTP 时间服务端**（默认 `:8080`）：对外提供 `/time` 接口（见上）。
+
+两个服务之间，本机时钟由 `-server-ntp true`（默认开启）**后台用 NTP 自校准**保持准确，因此对外提供的时间也是准确的。
+
+```bash
+# A 机（需管理员，且 123 端口未被 w32time 等占用）：
+winTimeSync.exe server -server-addr :8080 -server-ntp-port 123
+
+# B 机用标准 NTP 同步 A：
+winTimeSync.exe run -source ntp -ntp-server <A的IP>:123 -interval 60
+
+# 或 B 机主备：主用 A 的 NTP，备用 A 的 HTTP
+winTimeSync.exe run -chain "ntp:<A的IP>:123,http:http://<A的IP>:8080/time" -interval 60
+```
+
+> 端口说明：UDP 123 是系统特权端口，启动 NTP 服务端**必须管理员**。若该端口已被 Windows 自带 `w32time` 占用，先停止它（`net stop w32time`）或改用其它端口（如 `-server-ntp-port 12345`，B 机相应用 `<A的IP>:12345`）。
 
 ### 一键配置脚本（config.bat）
 

@@ -16,9 +16,11 @@ var (
 	interval   = flag.Int("interval", 3600, "同步间隔（秒），run 模式生效")
 	check      = flag.Bool("check", false, "仅检查时间偏差，不修改系统时间")
 	timeoutSec = flag.Int("timeout", 5, "单次请求超时（秒）")
-	serverAddr = flag.String("server-addr", ":8080", "HTTP 时间服务器监听地址 (server 模式)")
-	serverNTP  = flag.Bool("server-ntp", true, "server 模式下是否后台用 NTP 校准本机时钟")
-	quiet      = flag.Bool("quiet", false, "安静模式，仅输出错误")
+	serverAddr     = flag.String("server-addr", ":8080", "HTTP 时间服务器监听地址 (server 模式)")
+	serverNTP      = flag.Bool("server-ntp", true, "server 模式下是否后台用 NTP 校准本机时钟")
+	serverNTPServe = flag.Bool("server-ntp-serve", true, "server 模式下是否同时启动 NTP 服务器(UDP)，使本机兼作 NTP 时间源")
+	serverNTPPort  = flag.String("server-ntp-port", "123", "NTP 服务器监听端口 (server 模式, 默认 123，需管理员)")
+	quiet          = flag.Bool("quiet", false, "安静模式，仅输出错误")
 )
 
 // timeSource 表示主备链中的一个时间源。
@@ -94,6 +96,11 @@ func main() {
 			os.Exit(1)
 		}
 	case "server":
+		if *serverNTPServe {
+			if err := startNTPServer(":" + *serverNTPPort); err != nil {
+				fmt.Fprintf(os.Stderr, "警告: NTP 服务器启动失败，仅启用 HTTP 时间服务器: %v\n", err)
+			}
+		}
 		if err := startTimeServer(*serverAddr, *serverNTP, *ntpServer, time.Duration(*interval)*time.Second); err != nil {
 			fmt.Fprintf(os.Stderr, "HTTP 时间服务器启动失败: %v\n", err)
 			os.Exit(1)
@@ -203,7 +210,7 @@ func doSync() error {
 }
 
 func printUsage() {
-	fmt.Print(`winTimeSync - 轻量级时间同步工具（NTP / 内网 HTTP 双协议，支持开机启动）
+	fmt.Print(`winTimeSync - 轻量级时间同步工具（NTP / 内网 HTTP 双协议；server 模式可同时充当 NTP+HTTP 时间源，支持开机启动）
 
 用法:
   winTimeSync run                      持续运行，按 -interval 周期同步（默认 3600 秒）
@@ -225,8 +232,10 @@ func printUsage() {
   -quiet               安静模式，仅输出错误
 
 server 模式参数:
-  -server-addr string  监听地址（默认 :8080）
-  -server-ntp bool     后台用 NTP 校准本机时钟（默认 true）
+  -server-addr string       HTTP 时间服务器监听地址（默认 :8080）
+  -server-ntp bool          后台用 NTP 校准本机时钟（默认 true）
+  -server-ntp-serve bool    同时启动 NTP 服务器(UDP)，使本机兼作 NTP 时间源（默认 true）
+  -server-ntp-port string   NTP 服务器端口（默认 123，需管理员；若被占用可改用其它端口）
 
 示例:
   # 单源
@@ -239,8 +248,16 @@ server 模式参数:
   # 主备：NTP A 主，NTP B/C 备
   winTimeSync run -chain "ntp:time1.aliyun.com:123,ntp:time2.aliyun.com:123,ntp:time.windows.com:123" -interval 300
 
+  # A 机：同时作为 NTP(123) + HTTP 时间源，并后台用 NTP 自校准（需管理员，且 123 端口未被占用）
+  winTimeSync server -server-addr :8080 -server-ntp-port 123
+
+  # B 机：用 NTP 同步 A（假设 A 的 IP 为 192.168.1.10）
+  winTimeSync run -source ntp -ntp-server 192.168.1.10:123 -interval 60
+
+  # B 机主备：主用 A 的 NTP，备用 A 的 HTTP
+  winTimeSync run -chain "ntp:192.168.1.10:123,http:http://192.168.1.10:8080/time" -interval 60
+
   winTimeSync once -chain "ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time" -check
-  winTimeSync server -server-addr :8080
   winTimeSync install -chain "ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time" -interval 60   （请以管理员身份运行）
 `)
 }

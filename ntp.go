@@ -84,3 +84,68 @@ func ntpToTime(sec, frac uint32) time.Time {
 	nsec := int64(float64(frac) * 1e9 / (1 << 32))
 	return time.Unix(unix, nsec).UTC()
 }
+
+// startNTPServer 启动一个 NTP 服务端（UDP），把本机当前系统时间作为时间源应答给客户端。
+// 它读取 mode=3 的客户端请求，回复标准 mode=4 的服务器报文（RFC5905）。
+// 注意：绑定 123 端口需要管理员权限，且该端口不能被其它程序（如 Windows 的 w32time）占用。
+// 函数在独立 goroutine 中运行，不阻塞调用方；启动失败返回 error（调用方可选择仅保留 HTTP 服务）。
+func startNTPServer(addr string) error {
+	pc, err := net.ListenPacket("udp", addr)
+	if err != nil {
+		return fmt.Errorf("启动 NTP 服务器失败(需管理员且端口未被占用): %w", err)
+	}
+	logf("NTP 服务器已启动: %s (UDP)", addr)
+	go func() {
+		buf := make([]byte, 1024)
+		for {
+			n, src, err := pc.ReadFrom(buf)
+			if err != nil {
+				logf("NTP 读取错误: %v", err)
+				_ = pc.Close()
+				return
+			}
+			if n < 48 {
+				continue // 非法的 NTP 包，忽略
+			}
+			recv := time.Now()
+			resp := buildNTPResponse(buf[:n], recv, time.Now())
+			if _, err := pc.WriteTo(resp, src); err != nil {
+				logf("NTP 写回错误: %v", err)
+			}
+		}
+	}()
+	return nil
+}
+
+// buildNTPResponse 依据客户端请求(req)构造标准 NTP 服务器响应(mode=4)。
+// recv 为服务端收到请求的时刻，xmit 为构造响应的时刻（均取自本机系统时间）。
+func buildNTPResponse(req []byte, recv, xmit time.Time) []byte {
+	resp := make([]byte, 48)
+	// LI=0(无警告) | VN=请求版本(默认3) | Mode=4(server)
+	vn := (req[0] >> 3) & 0x07
+	if vn == 0 {
+		vn = 3
+	}
+	resp[0] = (0 << 6) | (vn << 3) | 4
+	resp[1] = 2                      // stratum 2：二级服务器（表示本机时钟已与上游同步）
+	resp[2] = req[2]                 // poll：回显客户端轮询间隔
+	resp[3] = 0xFA                   // precision：约 -6（1/64 秒级别，仅作示意）
+	// Root Delay / Root Dispersion 置 0（局域网内可忽略）
+	// Reference Identifier：LOCL 表示本地时钟（本机已自校准）
+	resp[12], resp[13], resp[14], resp[15] = 'L', 'O', 'C', 'L'
+	// Reference Timestamp：以发送时刻填充（简化实现）
+	rs, rf := timeToNTP(xmit)
+	binary.BigEndian.PutUint32(resp[16:], rs)
+	binary.BigEndian.PutUint32(resp[20:], rf)
+	// Originate Timestamp：回声客户端的 Transmit Timestamp（请求包 [40:48]）
+	copy(resp[24:32], req[40:48])
+	// Receive Timestamp：服务端收到请求的时刻
+	rs, rf = timeToNTP(recv)
+	binary.BigEndian.PutUint32(resp[32:], rs)
+	binary.BigEndian.PutUint32(resp[36:], rf)
+	// Transmit Timestamp：服务端发送响应的时刻
+	rs, rf = timeToNTP(xmit)
+	binary.BigEndian.PutUint32(resp[40:], rs)
+	binary.BigEndian.PutUint32(resp[44:], rf)
+	return resp
+}
