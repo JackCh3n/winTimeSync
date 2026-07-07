@@ -1,5 +1,7 @@
 # winTimeSync
 
+> 🔗 GitHub 仓库：https://github.com/JackCh3n/winTimeSync
+
 轻量级 Windows 时间同步小工具（Go 编写，**零外部依赖**）。
 
 兼容 **NTP 协议** 与 **内网 HTTP 时间源** 两种方式，支持按秒级间隔定时同步系统时钟，并可注册为系统开机启动。
