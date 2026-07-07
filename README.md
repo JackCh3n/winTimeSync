@@ -16,11 +16,12 @@
 
 ## 编译
 
-需要 Go 1.22+。在项目目录执行：
+需要 Go 1.22+。
 
-```bash
-go build -o winTimeSync.exe .
-```
+- **推荐（自动注入版本号）**：双击 `build.bat`，版本号按 `1.00 + 0.01 × git 提交次数` 自动计算并通过 `-ldflags` 注入 `main.Version`。
+- 手动编译：`go build -o winTimeSync.exe .`（此时 `version` 子命令显示 `dev`）。
+
+版本规则：每提交一次递增 0.01（如第 9 次提交为 `v1.09`），`version` 子命令与 `build.bat` 均遵循此规则。
 
 ## 使用
 

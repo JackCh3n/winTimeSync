@@ -131,6 +131,7 @@
     background: var(--code); border: 1px solid #1d2738; border-radius: 12px;
     padding: 18px 20px; overflow-x: auto; font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
     font-size: 13.5px; color: #cdd6e4; line-height: 1.7;
+    white-space: pre-wrap; word-break: break-word;
   }
   .code .c { color: #6b7a92; }
   .code .k { color: #ff9d72; }
@@ -202,13 +203,123 @@
     <div class="dl-card">
       <div class="dl-icon">🕰️</div>
       <div class="dl-info">
-        <h3>winTimeSync.exe <span class="ver">v1.0</span></h3>
+        <h3>winTimeSync.exe <span class="ver">v1.09</span></h3>
         <div class="dl-meta">Windows · amd64 · 约 8.03 MB · 零外部依赖</div>
-        <a class="btn btn-down" href="winTimeSync.exe" download>⬇ 立即下载</a>
-        <div class="hash-box" style="margin-top:16px;">
-          <div class="row"><span class="lab">SHA256</span><code>d88ffdb28ccbec16511d4c41a999aaf134350a00c8ab5c42e2c1a92421add074</code></div>
-          <div class="row"><span class="lab">MD5</span><code>720af28c0e841afda85ef1ecfec517dc</code></div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap;">
+          <a class="btn btn-down" href="winTimeSync.exe" download>⬇ 下载 exe</a>
+          <a class="btn btn-ghost" href="config.bat" download>⬇ 下载 config.bat</a>
         </div>
+        <div class="hash-box" style="margin-top:16px;">
+          <div class="row"><span class="lab">SHA256</span><code>ba73114e5fbba381e6dd89cc436ce3803650e5d5cc3a7c818b6c86c6e918f709</code></div>
+          <div class="row"><span class="lab">MD5</span><code>26944cdf0affcf139eeefe3588af536f</code></div>
+        </div>
+        <details style="margin-top:16px;">
+          <summary style="cursor:pointer;color:var(--brand);font-weight:600;">查看 config.bat 内容（中文配置向导）</summary>
+          <div class="code" style="margin-top:10px;font-size:12px;max-height:340px;overflow:auto;">@chcp 65001 &gt;nul
+@echo off
+setlocal enabledelayedexpansion
+cd /d "%~dp0"
+
+echo ============================================================
+echo          winTimeSync 时间同步 配置向导
+echo      （面向区县基础运维人员，按提示选择即可）
+echo ============================================================
+echo.
+
+:: 检查程序是否存在
+if not exist winTimeSync.exe (
+    echo [错误] 未找到 winTimeSync.exe，请先编译（go build -o winTimeSync.exe .）。
+    echo.
+    pause
+    exit /b 1
+)
+
+:: 管理员权限检查（设置系统时间 / 注册开机启动需要）
+net session &gt;nul 2&gt;&1
+if %errorLevel% neq 0 (
+    echo [提示] 当前不是管理员身份。
+    echo         设置系统时间、注册开机启动会失败。
+    echo         建议：右键本文件 - 以管理员身份运行。
+    echo.
+    pause
+)
+
+echo 请选择【运行方式】：
+echo   1) 立即测试一次（仅查看时间偏差，不修改系统时间）
+echo   2) 立即开始持续同步（前台运行，按 Ctrl+C 停止）
+echo   3) 注册为开机启动（系统级计划任务，重启后自动运行，需管理员）
+echo.
+set /p RUNMODE=请输入数字 [1-3]：
+
+echo.
+echo 请选择【时间源模式】：
+echo   1) 单一 NTP 服务器（如阿里云 / 国家授时中心）
+echo   2) 单一 HTTP 时间地址（如内网 nginx 门户）
+echo   3) 主备：NTP 主 + HTTP 备
+echo   4) 主备：多个 NTP 服务器（A 主，B / C 备）
+echo.
+set /p SRCMODE=请输入数字 [1-4]：
+
+set "ARGS="
+
+if "%SRCMODE%"=="1" (
+    set /p NTP=请输入 NTP 服务器[默认 pool.ntp.org:123]：
+    if "!NTP!"=="" set "NTP=pool.ntp.org:123"
+    set "ARGS=-source ntp -ntp-server !NTP!"
+) else if "%SRCMODE%"=="2" (
+    set /p URL=请输入 HTTP 时间地址[默认 http://127.0.0.1:8080/time]：
+    if "!URL!"=="" set "URL=http://127.0.0.1:8080/time"
+    set "ARGS=-source http -http-url !URL!"
+) else if "%SRCMODE%"=="3" (
+    set /p NTP=请输入主用 NTP 服务器[默认 pool.ntp.org:123]：
+    if "!NTP!"=="" set "NTP=pool.ntp.org:123"
+    set /p URL=请输入备用 HTTP 地址[默认 http://127.0.0.1:8080/time]：
+    if "!URL!"=="" set "URL=http://127.0.0.1:8080/time"
+    set "ARGS=-chain ntp:!NTP!,http:!URL!"
+) else if "%SRCMODE%"=="4" (
+    set /p N1=主用 NTP[默认 time1.aliyun.com:123]：
+    if "!N1!"=="" set "N1=time1.aliyun.com:123"
+    set /p N2=备用 NTP 1[默认 time2.aliyun.com:123]：
+    if "!N2!"=="" set "N2=time2.aliyun.com:123"
+    set /p N3=备用 NTP 2[默认 time.windows.com:123]：
+    if "!N3!"=="" set "N3=time.windows.com:123"
+    set "ARGS=-chain ntp:!N1!,ntp:!N2!,ntp:!N3!"
+) else (
+    echo 无效选择，使用默认单一 NTP。
+    set "ARGS=-source ntp"
+)
+
+echo.
+set /p INTERVAL=请输入同步间隔秒数[默认 3600]：
+if "!INTERVAL!"=="" set "INTERVAL=3600"
+set "ARGS=!ARGS! -interval !INTERVAL!"
+
+echo.
+echo ------------------- 配置预览 -------------------
+echo   winTimeSync.exe !ARGS!
+echo -------------------------------------------------
+
+if "%RUNMODE%"=="1" (
+    echo.
+    echo 正在执行【一次测试（仅检查偏差）】...
+    winTimeSync.exe once !ARGS! -check
+) else if "%RUNMODE%"=="2" (
+    echo.
+    echo 开始【持续同步】（按 Ctrl+C 停止）...
+    winTimeSync.exe run !ARGS!
+) else if "%RUNMODE%"=="3" (
+    echo.
+    echo 正在【注册开机启动】...
+    winTimeSync.exe install !ARGS!
+    echo.
+    winTimeSync.exe status
+) else (
+    echo 未选择有效的运行方式，已退出。
+)
+
+echo.
+pause</div>
+        </details>
       </div>
     </div>
   </div>
@@ -316,8 +427,15 @@
         <text x="410" y="220" text-anchor="middle" fill="#e8893a" font-size="12">HTTP /time 同步</text>
       </svg>
       <div class="legend">
-        💡 实测：A 启动时 <code>winTimeSync.exe server -server-addr :18090 -server-ntp-port 123 -server-ntp=false</code>，
-        B 用 <code>winTimeSync.exe once -source ntp -ntp-server &lt;A的IP&gt;:123 -check</code> 即命中 <code>ntp:A</code>，偏移 ≈ 0ms。
+        💡 实测拓扑：A 机既对内供时又后台自校准，B 机直接用 NTP 同步 A，偏移 ≈ 0ms：
+        <div class="code" style="margin-top:12px;font-size:12.5px;">
+<span class="c"># A 机：启动 NTP(UDP) + HTTP 双协议时间源</span>
+winTimeSync.exe server -server-addr :18090 -server-ntp-port 123 -server-ntp=false
+
+<span class="c"># B 机：用 NTP 协议同步 A</span>
+winTimeSync.exe once -source ntp -ntp-server &lt;A的IP&gt;:123 -check
+<span class="c"># → 命中 ntp:A，偏移 ≈ 0ms</span>
+        </div>
       </div>
     </div>
   </div>
@@ -338,12 +456,10 @@
 winTimeSync.exe <span class="k">run</span> -source ntp -interval 600
 
 <span class="c"># 内网 HTTP 源，每 60 秒同步</span>
-winTimeSync.exe <span class="k">run</span> -source http \
-  -http-url http://127.0.0.1:8080/time -interval 60
+winTimeSync.exe <span class="k">run</span> -source http -http-url http://127.0.0.1:8080/time -interval 60
 
 <span class="c"># 主用 NTP，备用 HTTP</span>
-winTimeSync.exe <span class="k">run</span> -chain \
-  <span class="s">"ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time"</span> -interval 60
+winTimeSync.exe <span class="k">run</span> -chain <span class="s">"ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time"</span> -interval 60
 
 <span class="c"># 只检查偏差不改时间</span>
 winTimeSync.exe <span class="k">once</span> -source ntp -check
@@ -353,8 +469,7 @@ winTimeSync.exe <span class="k">once</span> -source ntp -check
         <h3 style="margin-bottom:12px;">双协议时间源 & 开机启动</h3>
         <div class="code">
 <span class="c"># A：同时提供 NTP + HTTP（需管理员）</span>
-winTimeSync.exe <span class="k">server</span> -server-addr :8080 \
-  -server-ntp-port 123 -server-ntp=true
+winTimeSync.exe <span class="k">server</span> -server-addr :8080 -server-ntp-port 123 -server-ntp=true
 
 <span class="c"># nginx 直接提供 /time（无需本软件）</span>
 <span class="c"># location = /time {</span>
@@ -362,8 +477,7 @@ winTimeSync.exe <span class="k">server</span> -server-addr :8080 \
 <span class="c"># }</span>
 
 <span class="c"># 注册 / 查看 / 移除 开机启动</span>
-winTimeSync.exe <span class="k">install</span> -chain \
-  <span class="s">"ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time"</span> -interval 60
+winTimeSync.exe <span class="k">install</span> -chain <span class="s">"ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time"</span> -interval 60
 winTimeSync.exe <span class="k">status</span>
 winTimeSync.exe <span class="k">uninstall</span>
         </div>
@@ -418,7 +532,7 @@ winTimeSync.exe <span class="k">uninstall</span>
     <span>本软件页面由</span>
     <span class="nm">Hy3</span>
     <span>亲手打造 ·</span>
-    <b>winTimeSync v1.0</b>
+    <b>winTimeSync v1.09</b>
   </div>
   <p class="disclaimer">
     本工具仅用于内网时间校准与运维辅助。设置系统时间与注册开机任务需管理员权限；NTP 服务端默认占用 UDP 123 特权端口，若被系统 w32time 占用请改用其它端口或先停止该服务。下载文件请核对上方 SHA256 哈希以确保完整。

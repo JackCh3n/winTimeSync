@@ -8,6 +8,10 @@ import (
 	"time"
 )
 
+// Version 由构建脚本通过 -ldflags "-X main.Version=..." 注入；
+// 直接 go build 未注入时显示 "dev"。版本规则：1.00 + 0.01 * git 提交次数。
+var Version = "dev"
+
 var (
 	source     = flag.String("source", "ntp", "时间源: ntp | http（未指定 -chain 时生效）")
 	chain      = flag.String("chain", "", "主备链：按顺序尝试，用逗号分隔。每项格式 ntp:地址 或 http:地址。例: ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time")
@@ -122,7 +126,7 @@ func main() {
 			fmt.Println("未注册开机启动")
 		}
 	case "version", "-v", "--version":
-		fmt.Println("winTimeSync v1.0.0")
+		fmt.Println("winTimeSync v" + Version)
 	default:
 		printUsage()
 		os.Exit(1)
