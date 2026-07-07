@@ -39,47 +39,22 @@ func queryHTTPTime(url string, timeout time.Duration, client *http.Client) (corr
 	}
 	t3 := time.Now()
 
-	// 优先使用响应头 Date（兼容普通 Web 服务器，如 nginx 的 "Date: Tue, 07 Jul 2026 02:41:52 GMT"）
+	// 取时间优先级：
+	//   ① 响应体（携带亚秒精度，如工具自带服务器 / 自定义 /time 接口的 RFC3339Nano）
+	//   ② 响应头 Date（兼容普通 Web 服务器，如 nginx 的 "Date: Tue, 07 Jul 2026 02:41:52 GMT"，整秒精度）
+	// 这样对自带服务器可读到毫秒级精度，对只返回 Date 头的普通站点仍可取时。
 	var serverTime time.Time
-	if dateHdr := resp.Header.Get("Date"); dateHdr != "" {
-		if ts, e := time.Parse(http.TimeFormat, dateHdr); e == nil {
+	if st, e := parseBodyTime(body); e == nil {
+		serverTime = st
+	} else if dateHdr := resp.Header.Get("Date"); dateHdr != "" {
+		if ts, e2 := time.Parse(http.TimeFormat, dateHdr); e2 == nil {
 			serverTime = ts.UTC()
-		} else if ts2, e2 := time.Parse(time.RFC1123Z, dateHdr); e2 == nil {
+		} else if ts2, e3 := time.Parse(time.RFC1123Z, dateHdr); e3 == nil {
 			serverTime = ts2.UTC()
 		}
 	}
-
-	// 若响应头无可用时间，再解析响应体（JSON / RFC3339 / Unix 时间戳）
 	if serverTime.IsZero() {
-		var r httpTimeResponse
-		raw := strings.TrimSpace(string(body))
-		if jsonErr := json.Unmarshal([]byte(raw), &r); jsonErr != nil {
-			// 退化解析：把整个 body 当作 RFC3339 或 Unix 时间戳
-			if ts, perr := time.Parse(time.RFC3339Nano, raw); perr == nil {
-				r.Time = ts.UTC().Format(time.RFC3339Nano)
-			} else if u, perr := strconv.ParseInt(raw, 10, 64); perr == nil {
-				if u > 1e12 { // 毫秒
-					r.UnixMs = u
-				} else { // 秒
-					r.Unix = u
-				}
-			} else {
-				return time.Time{}, 0, 0, fmt.Errorf("无法解析时间响应（且无 Date 头）: %q", raw)
-			}
-		}
-		switch {
-		case r.Unix > 0:
-			serverTime = time.Unix(r.Unix, 0).UTC()
-		case r.UnixMs > 0:
-			serverTime = time.Unix(r.UnixMs/1000, (r.UnixMs%1000)*int64(time.Millisecond)).UTC()
-		case r.Time != "":
-			serverTime, err = time.Parse(time.RFC3339Nano, r.Time)
-			if err != nil {
-				return time.Time{}, 0, 0, fmt.Errorf("解析 time 字段失败: %w", err)
-			}
-		default:
-			return time.Time{}, 0, 0, fmt.Errorf("响应中未找到时间字段，且无 Date 头")
-		}
+		return time.Time{}, 0, 0, fmt.Errorf("无法从响应体或 Date 头解析时间: %q", strings.TrimSpace(string(body)))
 	}
 
 	rtt := t3.Sub(t0)
@@ -89,6 +64,39 @@ func queryHTTPTime(url string, timeout time.Duration, client *http.Client) (corr
 	delay = rtt
 
 	return corrected, offset, delay, nil
+}
+
+// parseBodyTime 解析响应体中的时间，支持 JSON / RFC3339 / Unix 时间戳。
+// 优先使用带亚秒精度的字段（time > unixMs > unix）；失败时返回错误，由调用方回退到 Date 头。
+func parseBodyTime(body []byte) (time.Time, error) {
+	raw := strings.TrimSpace(string(body))
+	if raw == "" {
+		return time.Time{}, fmt.Errorf("空响应体")
+	}
+	var r httpTimeResponse
+	if jsonErr := json.Unmarshal([]byte(raw), &r); jsonErr == nil {
+		switch {
+		case r.Time != "":
+			if ts, e := time.Parse(time.RFC3339Nano, r.Time); e == nil {
+				return ts.UTC(), nil
+			}
+		case r.UnixMs > 0:
+			return time.Unix(r.UnixMs/1000, (r.UnixMs%1000)*int64(time.Millisecond)).UTC(), nil
+		case r.Unix > 0:
+			return time.Unix(r.Unix, 0).UTC(), nil
+		}
+	}
+	// 退化解析：把整个 body 当作 RFC3339 或 Unix 时间戳
+	if ts, perr := time.Parse(time.RFC3339Nano, raw); perr == nil {
+		return ts.UTC(), nil
+	}
+	if u, perr := strconv.ParseInt(raw, 10, 64); perr == nil {
+		if u > 1e12 { // 毫秒
+			return time.Unix(u/1000, (u%1000)*int64(time.Millisecond)).UTC(), nil
+		}
+		return time.Unix(u, 0).UTC(), nil
+	}
+	return time.Time{}, fmt.Errorf("无法解析时间响应: %q", raw)
 }
 
 // startTimeServer 启动一个 HTTP 时间服务器，供内网其它机器作为时间源。

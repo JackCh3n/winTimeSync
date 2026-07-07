@@ -90,13 +90,51 @@ winTimeSync.exe install -chain "ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/
 
 `source=http`（或 `-chain` 中的 `http:` 项）时，工具向目标地址发起 GET 请求，按以下优先级取时间：
 
-1. **响应头 `Date`**（优先）：兼容普通 Web 服务器，如 nginx 返回的 `Date: Tue, 07 Jul 2026 02:41:52 GMT`。
-2. **响应体**，支持以下格式：
-   - JSON：`{"time":"2026-07-06T17:40:59.123Z","unix":1783331459,"unixMs":1783331459123}`
+1. **响应体**（优先，亚秒精度）：本工具自带服务器、自定义 `/time` 接口返回的时间，支持以下格式：
+   - JSON：`{"time":"2026-07-06T17:40:59.123Z","unix":1783331459,"unixMs":1783331459123}`（优先用 `time` 字段，含亚秒）
    - 纯 RFC3339 字符串：`2026-07-06T17:40:59.123Z`
    - 纯 Unix 时间戳（秒或毫秒）
+2. **响应头 `Date`**（回退，整秒精度）：兼容普通 Web 服务器，如 nginx 返回的 `Date: Tue, 07 Jul 2026 02:41:52 GMT`。
 
-内置 `server` 模式返回上述 JSON（路径 `/time`），可直接作为内网时间源使用。借助 `Date` 头兼容，任意正常 Web 站点（如 `http://127.0.0.1:8080/time`）也能作为粗略时间源。
+内置 `server` 模式返回上述 JSON（路径 `/time`），可直接作为内网时间源使用，且对外提供亚秒级精度。借助 `Date` 头兼容，任意正常 Web 站点（如 `http://127.0.0.1:8080/time`）也能作为粗略时间源（整秒精度）。
+
+### 用 nginx 直接提供时间源（无需运行本软件）
+
+工具已兼容 HTTP `Date` 响应头，而 **nginx 对任何响应都会自动带上 `Date` 头**（例如 `Date: Tue, 07 Jul 2026 02:41:52 GMT`）。因此：
+
+- **最简方案（零配置）**：直接把任意可达的 nginx 站点地址当作时间源即可，例如 `-http-url http://127.0.0.1:8080/time`，工具自动读取 `Date` 头取时（精度到秒）。
+- **推荐方案（独立 `/time` 接口，返回 RFC3339）**：在 nginx 配置中增加一段，利用 nginx 内置变量 `$time_iso8601`（**无需任何第三方模块**）：
+
+  ```nginx
+  server {
+      listen 8888;
+      server_name _;
+
+      # 独立时间接口，返回当前 RFC3339 时间（如 2026-07-07T02:41:52+00:00）
+      location = /time {
+          default_type application/json;
+          add_header Access-Control-Allow-Origin "*" always;
+          return 200 '{"time":"$time_iso8601"}';
+      }
+
+      # 健康检查
+      location = /health {
+          return 200 "ok";
+      }
+  }
+  ```
+
+  重载配置：`nginx -s reload`。随后使用 `winTimeSync.exe run -source http -http-url http://<服务器IP>:8888/time -interval 60` 即可。
+
+> 说明：nginx 内置变量 `$msec` 可返回带毫秒的浮点时间（如 `1783331459.123`），但工具的 `unix` 字段要求整数，故示例只用 `$time_iso8601`（RFC3339 字符串）。若只需整秒精度，最简方案的 `Date` 头已足够。
+
+### 一键配置脚本（config.bat）
+
+项目附带 `config.bat`，面向区县基础运维人员：双击（建议**右键 → 以管理员身份运行**）后按中文提示选择「运行方式」与「时间源模式」即可完成配置并运行 / 注册开机启动，无需记忆命令行参数。
+
+```bat
+rem 典型流程：运行方式选 3（开机启动） + 时间源模式选 3（NTP 主 + HTTP 备）
+```
 
 ## 修改运行参数
 
