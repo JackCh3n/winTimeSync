@@ -43,10 +43,21 @@ func queryNTP(server string, timeout time.Duration) (corrected time.Time, offset
 	}
 
 	resp := make([]byte, 48)
-	if _, err = conn.Read(resp); err != nil {
+	n, err := conn.Read(resp)
+	if err != nil {
 		return time.Time{}, 0, 0, fmt.Errorf("读取响应失败: %w", err)
 	}
 	t3 := time.Now()
+	if n < 48 {
+		return time.Time{}, 0, 0, fmt.Errorf("响应包长度异常: %d 字节（应 48）", n)
+	}
+	// 校验响应：Mode 应为 4(server)；stratum=0 表示 Kiss-of-Death（拒绝并报错，避免用零时间戳算出荒谬偏移）
+	if resp[0]&0x07 != 4 {
+		return time.Time{}, 0, 0, fmt.Errorf("响应 Mode 异常: %d（应为 4/server）", resp[0]&0x07)
+	}
+	if resp[1] == 0 {
+		return time.Time{}, 0, 0, fmt.Errorf("服务器返回 Kiss-of-Death (stratum=0), 参考标识: %q", resp[12:16])
+	}
 
 	// 响应包中：接收时间戳 t1 位于 [32:40]，发送时间戳 t2 位于 [40:48]
 	t1 := ntpBytesToTime(resp[32:40])
@@ -127,9 +138,9 @@ func buildNTPResponse(req []byte, recv, xmit time.Time) []byte {
 		vn = 3
 	}
 	resp[0] = (0 << 6) | (vn << 3) | 4
-	resp[1] = 2                      // stratum 2：二级服务器（表示本机时钟已与上游同步）
-	resp[2] = req[2]                 // poll：回显客户端轮询间隔
-	resp[3] = 0xFA                   // precision：约 -6（1/64 秒级别，仅作示意）
+	resp[1] = 2      // stratum 2：二级服务器（表示本机时钟已与上游同步）
+	resp[2] = req[2] // poll：回显客户端轮询间隔
+	resp[3] = 0xFA   // precision：约 -6（1/64 秒级别，仅作示意）
 	// Root Delay / Root Dispersion 置 0（局域网内可忽略）
 	// Reference Identifier：LOCL 表示本地时钟（本机已自校准）
 	resp[12], resp[13], resp[14], resp[15] = 'L', 'O', 'C', 'L'

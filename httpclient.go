@@ -113,11 +113,15 @@ func startTimeServer(addr string, selfSyncNTP bool, ntpServer string, interval t
 			if corrected, off, _, err := queryNTP(ntpServer, 5*time.Second); err == nil {
 				_ = setSystemTime(corrected)
 				logf("server: 自身已用 NTP 校准, 偏移=%s", off.Round(time.Millisecond))
+			} else {
+				logf("server: 初始 NTP 校准失败: %v", err)
 			}
 			for range ticker.C {
 				if corrected, off, _, err := queryNTP(ntpServer, 5*time.Second); err == nil {
 					_ = setSystemTime(corrected)
 					logf("server: 周期 NTP 校准完成, 偏移=%s", off.Round(time.Millisecond))
+				} else {
+					logf("server: 周期 NTP 校准失败: %v", err)
 				}
 			}
 		}()

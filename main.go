@@ -13,13 +13,13 @@ import (
 var Version = "dev"
 
 var (
-	source     = flag.String("source", "ntp", "时间源: ntp | http（未指定 -chain 时生效）")
-	chain      = flag.String("chain", "", "主备链：按顺序尝试，用逗号分隔。每项格式 ntp:地址 或 http:地址。例: ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time")
-	ntpServer  = flag.String("ntp-server", "pool.ntp.org:123", "NTP 服务器地址 (source=ntp 时生效)")
-	httpURL    = flag.String("http-url", "http://127.0.0.1:8080/time", "HTTP 时间服务器地址 (source=http 时生效)")
-	interval   = flag.Int("interval", 3600, "同步间隔（秒），run 模式生效")
-	check      = flag.Bool("check", false, "仅检查时间偏差，不修改系统时间")
-	timeoutSec = flag.Int("timeout", 5, "单次请求超时（秒）")
+	source         = flag.String("source", "ntp", "时间源: ntp | http（未指定 -chain 时生效）")
+	chain          = flag.String("chain", "", "主备链：按顺序尝试，用逗号分隔。每项格式 ntp:地址 或 http:地址。例: ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time")
+	ntpServer      = flag.String("ntp-server", "pool.ntp.org:123", "NTP 服务器地址 (source=ntp 时生效)")
+	httpURL        = flag.String("http-url", "http://127.0.0.1:8080/time", "HTTP 时间服务器地址 (source=http 时生效)")
+	interval       = flag.Int("interval", 3600, "同步间隔（秒），run 模式生效")
+	check          = flag.Bool("check", false, "仅检查时间偏差，不修改系统时间")
+	timeoutSec     = flag.Int("timeout", 5, "单次请求超时（秒）")
 	serverAddr     = flag.String("server-addr", ":8080", "HTTP 时间服务器监听地址 (server 模式)")
 	serverNTP      = flag.Bool("server-ntp", true, "server 模式下是否后台用 NTP 校准本机时钟")
 	serverNTPServe = flag.Bool("server-ntp-serve", true, "server 模式下是否同时启动 NTP 服务器(UDP)，使本机兼作 NTP 时间源")
