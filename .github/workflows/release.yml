@@ -1,0 +1,103 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { goos: windows, goarch: amd64, ext: ".exe" }
+          - { goos: linux,   goarch: amd64, ext: "" }
+          - { goos: linux,   goarch: arm64, ext: "" }
+          - { goos: darwin,  goarch: amd64, ext: "" }
+          - { goos: darwin,  goarch: arm64, ext: "" }
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Compute version (1.00 + 0.01 * commit count)
+        id: ver
+        run: |
+          COUNT=$(git rev-list --count HEAD)
+          VERSION=$(awk "BEGIN{printf \"%.2f\", 1.0 + 0.01 * $COUNT}")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Computed version: v$VERSION (commits=$COUNT)"
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: "0"
+        run: |
+          mkdir -p dist
+          go build -ldflags "-s -w -X main.Version=${{ steps.ver.outputs.version }}" \
+            -o "dist/winTimeSync-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}" .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: winTimeSync-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/winTimeSync-${{ matrix.goos }}-${{ matrix.goarch }}${{ matrix.ext }}
+
+  release:
+    name: create release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compute version
+        id: ver
+        run: |
+          COUNT=$(git rev-list --count HEAD)
+          VERSION=$(awk "BEGIN{printf \"%.2f\", 1.0 + 0.01 * $COUNT}")
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd dist
+          sha256sum * > winTimeSync-${{ steps.ver.outputs.version }}-sha256.txt
+          cat winTimeSync-${{ steps.ver.outputs.version }}-sha256.txt
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: winTimeSync v${{ steps.ver.outputs.version }}
+          body: |
+            winTimeSync v${{ steps.ver.outputs.version }}
+            - NTP / 内网 HTTP 双协议时间源
+            - 主备链(-chain) 与多上游择优(-strategy best)
+            - 偏移阈值(-min-offset) 与大跳保护(-max-offset)
+            - 配置文件(winTimeSync.json) 驱动、日志落盘(-log)、状态文件(-status-file)
+            - server 模式可同时充当 NTP+HTTP 时间源
+            - 跨平台：Windows / Linux(amd64,arm64) / macOS(amd64,arm64)
+          files: |
+            dist/winTimeSync-*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

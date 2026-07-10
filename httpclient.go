@@ -19,12 +19,19 @@ type httpTimeResponse struct {
 
 // queryHTTPTime 请求内网 HTTP 时间服务器，测量往返耗时(RTT)，估算时间偏移并校准。
 // 通过 t0(发请求前) / t3(收响应后) 与服务器返回的时间，按 (serverTime + RTT/2) 估算服务端当前时间。
+// 显式校验：仅接受 2xx 状态码；不跟随重定向（遇到 3xx 直接判失败，交由主备链尝试下一个源）。
 func queryHTTPTime(url string, timeout time.Duration, client *http.Client) (corrected time.Time, offset, delay time.Duration, err error) {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
 	if client == nil {
-		client = &http.Client{Timeout: timeout}
+		client = &http.Client{
+			Timeout: timeout,
+			// 禁止自动跟随重定向：把 3xx 交给上层判断，避免被重定向到登录页等无意义页面。
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		}
 	}
 
 	t0 := time.Now()
@@ -33,6 +40,10 @@ func queryHTTPTime(url string, timeout time.Duration, client *http.Client) (corr
 		return time.Time{}, 0, 0, fmt.Errorf("请求失败: %w", err)
 	}
 	defer resp.Body.Close()
+	// 显式校验 HTTP 状态码：仅接受 2xx
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return time.Time{}, 0, 0, fmt.Errorf("HTTP 状态码异常: %d %s", resp.StatusCode, resp.Status)
+	}
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return time.Time{}, 0, 0, fmt.Errorf("读取响应失败: %w", err)

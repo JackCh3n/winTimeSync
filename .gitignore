@@ -12,3 +12,6 @@ Thumbs.db
 
 # 编辑器备份
 *.exe~
+
+# 运行时状态文件
+winTimeSync.status.json

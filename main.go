@@ -13,18 +13,24 @@ import (
 var Version = "dev"
 
 var (
-	source         = flag.String("source", "ntp", "时间源: ntp | http（未指定 -chain 时生效）")
-	chain          = flag.String("chain", "", "主备链：按顺序尝试，用逗号分隔。每项格式 ntp:地址 或 http:地址。例: ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time")
+	configFile     = flag.String("config", "", "配置文件路径（默认: 可执行文件同目录/winTimeSync.json）。run 模式每次循环重读")
+	source         = flag.String("source", "ntp", "单源模式时间源: ntp | http（未指定 -chain 时生效）")
+	chain          = flag.String("chain", "", "主备链：按顺序尝试，用逗号分隔。每项 ntp:地址 或 http:地址。例: ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time")
 	ntpServer      = flag.String("ntp-server", "pool.ntp.org:123", "NTP 服务器地址 (source=ntp 时生效)")
 	httpURL        = flag.String("http-url", "http://127.0.0.1:8080/time", "HTTP 时间服务器地址 (source=http 时生效)")
 	interval       = flag.Int("interval", 3600, "同步间隔（秒），run 模式生效")
 	check          = flag.Bool("check", false, "仅检查时间偏差，不修改系统时间")
 	timeoutSec     = flag.Int("timeout", 5, "单次请求超时（秒）")
+	logFile        = flag.String("log", "", "日志文件路径；启用后日志追加写入该文件（quiet 时不输出控制台）")
+	statusFile     = flag.String("status-file", "", "同步状态文件路径（默认: 同目录/winTimeSync.status.json）")
+	minOffset      = flag.Int64("min-offset", 0, "偏移阈值(ms)：绝对值小于该值则跳过设置（0=不限制）")
+	maxOffset      = flag.Int64("max-offset", 0, "大跳保护(ms)：绝对值大于该值视为异常源，拒绝设置并尝试下一个（0=不限制）")
+	strategy       = flag.String("strategy", "fallback", "多源策略: fallback(顺序试错) | best(并发择优，取最小延时)")
 	serverAddr     = flag.String("server-addr", ":8080", "HTTP 时间服务器监听地址 (server 模式)")
 	serverNTP      = flag.Bool("server-ntp", true, "server 模式下是否后台用 NTP 校准本机时钟")
 	serverNTPServe = flag.Bool("server-ntp-serve", true, "server 模式下是否同时启动 NTP 服务器(UDP)，使本机兼作 NTP 时间源")
 	serverNTPPort  = flag.String("server-ntp-port", "123", "NTP 服务器监听端口 (server 模式, 默认 123，需管理员)")
-	quiet          = flag.Bool("quiet", false, "安静模式，仅输出错误")
+	quiet          = flag.Bool("quiet", false, "安静模式，仅输出错误（日志文件仍记录）")
 )
 
 // timeSource 表示主备链中的一个时间源。
@@ -35,11 +41,10 @@ type timeSource struct {
 }
 
 // buildChain 解析出本次同步要尝试的时间源顺序。
-// 若指定了 -chain 则按其顺序；否则回退到旧的 -source 单源模式（保持向后兼容）。
-func buildChain() ([]timeSource, error) {
-	if *chain != "" {
+func buildChain(ec effectiveConfig) ([]timeSource, error) {
+	if ec.Chain != "" {
 		var out []timeSource
-		for _, part := range strings.Split(*chain, ",") {
+		for _, part := range strings.Split(ec.Chain, ",") {
 			part = strings.TrimSpace(part)
 			if part == "" {
 				continue
@@ -63,21 +68,27 @@ func buildChain() ([]timeSource, error) {
 		}
 		return out, nil
 	}
-	// 旧模式：单一 -source
-	switch *source {
+	switch ec.Source {
 	case "ntp":
-		return []timeSource{{kind: "ntp", target: *ntpServer, label: "ntp:" + *ntpServer}}, nil
+		return []timeSource{{kind: "ntp", target: ec.NTPServer, label: "ntp:" + ec.NTPServer}}, nil
 	case "http":
-		return []timeSource{{kind: "http", target: *httpURL, label: "http:" + *httpURL}}, nil
+		return []timeSource{{kind: "http", target: ec.HTTPURL, label: "http:" + ec.HTTPURL}}, nil
 	default:
-		return nil, fmt.Errorf("未知时间源: %s（支持 ntp | http）", *source)
+		return nil, fmt.Errorf("未知时间源: %s（支持 ntp | http）", ec.Source)
 	}
 }
 
-func logf(format string, args ...interface{}) {
-	if !*quiet {
-		fmt.Printf(format+"\n", args...)
+// chainLabels 返回链中各源的日志标签，用于启动信息。
+func chainLabels(ec effectiveConfig) []string {
+	ch, err := buildChain(ec)
+	if err != nil {
+		return []string{"?"}
 	}
+	labels := make([]string, len(ch))
+	for i, s := range ch {
+		labels[i] = s.label
+	}
+	return labels
 }
 
 func main() {
@@ -90,12 +101,17 @@ func main() {
 	if err := flag.CommandLine.Parse(os.Args[2:]); err != nil {
 		os.Exit(2)
 	}
+	detectCLISetFlags()
 
 	switch cmd {
 	case "run":
-		runLoop()
+		ec := resolveConfig()
+		initLogger(ec.LogFile, ec.Quiet)
+		runLoop(ec)
 	case "once":
-		if err := doSync(); err != nil {
+		ec := resolveConfig()
+		initLogger(ec.LogFile, ec.Quiet)
+		if err := doSync(ec); err != nil {
 			fmt.Fprintf(os.Stderr, "同步失败: %v\n", err)
 			os.Exit(1)
 		}
@@ -133,84 +149,129 @@ func main() {
 	}
 }
 
-func runLoop() {
-	chain, err := buildChain()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "配置错误: %v\n", err)
-		os.Exit(1)
-	}
-	labels := make([]string, len(chain))
-	for i, s := range chain {
-		labels[i] = s.label
-	}
-	logf("winTimeSync 启动 | 主备链=[%s] | 间隔=%d秒 | 检查模式=%v",
-		strings.Join(labels, " > "), *interval, *check)
-	if *interval < 1 {
-		*interval = 1
-	}
-	// 启动后立即同步一次
-	if err := doSync(); err != nil {
+func runLoop(first effectiveConfig) {
+	ec := first
+	logf("winTimeSync 启动 | 主备链=[%s] | 间隔=%d秒 | 检查=%v | 策略=%s",
+		strings.Join(chainLabels(ec), " > "), ec.Interval, ec.Check, ec.Strategy)
+	if err := doSync(ec); err != nil {
 		fmt.Fprintf(os.Stderr, "初始同步失败: %v\n", err)
 	}
-	ticker := time.NewTicker(time.Duration(*interval) * time.Second)
+	ticker := time.NewTicker(time.Duration(ec.Interval) * time.Second)
 	defer ticker.Stop()
 	for range ticker.C {
-		if err := doSync(); err != nil {
+		ec = resolveConfig() // 每次循环重读配置，改文件即生效
+		if err := doSync(ec); err != nil {
 			fmt.Fprintf(os.Stderr, "[%s] 同步失败: %v\n",
 				time.Now().Format("2006-01-02 15:04:05"), err)
 		}
 	}
 }
 
-// doSync 按主备链顺序尝试各时间源，首个成功者用于校准系统时间。
-func doSync() error {
-	timeout := time.Duration(*timeoutSec) * time.Second
-
-	chain, err := buildChain()
+// doSync 按策略完成一次同步：best 并发择优，fallback 顺序试错。
+func doSync(ec effectiveConfig) error {
+	timeout := time.Duration(ec.Timeout) * time.Second
+	sources, err := buildChain(ec)
 	if err != nil {
 		return err
 	}
+	if len(sources) == 0 {
+		return fmt.Errorf("无可用的同步源")
+	}
 
-	var lastErr error
-	for _, s := range chain {
-		var (
+	// best 策略：并发请求所有源，取最小延时者（延迟越低通常越近、越可信）
+	if ec.Strategy == "best" && len(sources) > 1 {
+		type res struct {
+			src       timeSource
 			corrected time.Time
 			offset    time.Duration
 			delay     time.Duration
-		)
-		switch s.kind {
-		case "ntp":
-			corrected, offset, delay, err = queryNTP(s.target, timeout)
-		case "http":
-			corrected, offset, delay, err = queryHTTPTime(s.target, timeout, nil)
-		default:
-			err = fmt.Errorf("未知源类型: %s", s.kind)
+			err       error
 		}
-		if err != nil {
-			lastErr = err
-			logf("源 %s 失败: %v，尝试下一个", s.label, err)
+		chs := make([]chan res, len(sources))
+		for i, s := range sources {
+			chs[i] = make(chan res, 1)
+			go func(s timeSource, ch chan res) {
+				c, o, d, e := querySource(s, timeout)
+				ch <- res{s, c, o, d, e}
+			}(s, chs[i])
+		}
+		var best *res
+		for _, ch := range chs {
+			r := <-ch
+			if r.err != nil {
+				logf("源 %s 失败: %v", r.src.label, r.err)
+				continue
+			}
+			if best == nil || r.delay < best.delay {
+				b := r
+				best = &b
+			}
+		}
+		if best == nil {
+			writeStatusSafe(ec, "", 0, 0, false, "所有源失败")
+			return fmt.Errorf("所有时间源均失败（best 策略）")
+		}
+		return applyCorrection(ec, best.src, best.corrected, best.offset, best.delay)
+	}
+
+	// fallback 策略：顺序尝试，首个成功者用于校准
+	var lastErr error
+	for _, s := range sources {
+		c, o, d, e := querySource(s, timeout)
+		if e != nil {
+			lastErr = e
+			logf("源 %s 失败: %v，尝试下一个", s.label, e)
 			continue
 		}
-		// 成功
-		now := time.Now()
-		logf("[%s] 命中源=%s 偏移=%s 延时=%s 校准后=%s",
-			now.Format("2006-01-02 15:04:05"),
-			s.label,
-			offset.Round(time.Millisecond),
-			delay.Round(time.Millisecond),
-			corrected.Format("2006-01-02 15:04:05.000 MST"),
-		)
-		if *check {
-			logf("仅检查模式，未修改系统时间")
-			return nil
-		}
-		if err := setSystemTime(corrected); err != nil {
-			return fmt.Errorf("设置系统时间失败: %w", err)
-		}
-		logf("已同步系统时间 -> %s", corrected.Format("2006-01-02 15:04:05 MST"))
+		return applyCorrection(ec, s, c, o, d)
+	}
+	writeStatusSafe(ec, "", 0, 0, false, lastErr.Error())
+	return fmt.Errorf("所有时间源均失败，最后错误: %w", lastErr)
+}
+
+// querySource 按源类型调用对应客户端。
+func querySource(s timeSource, timeout time.Duration) (time.Time, time.Duration, time.Duration, error) {
+	switch s.kind {
+	case "ntp":
+		return queryNTP(s.target, timeout)
+	case "http":
+		return queryHTTPTime(s.target, timeout, nil)
+	default:
+		return time.Time{}, 0, 0, fmt.Errorf("未知源类型: %s", s.kind)
+	}
+}
+
+// applyCorrection 处理命中源后的偏移阈值、大跳保护与系统时间写入，并写状态文件。
+func applyCorrection(ec effectiveConfig, src timeSource, corrected time.Time, offset, delay time.Duration) error {
+	logf("命中源=%s 偏移=%s 延时=%s 校准后=%s",
+		src.label,
+		offset.Round(time.Millisecond),
+		delay.Round(time.Millisecond),
+		corrected.Format("2006-01-02 15:04:05.000 MST"),
+	)
+	if ec.Check {
+		logf("仅检查模式，未修改系统时间")
+		writeStatusSafe(ec, src.label, offset, delay, true, "check")
 		return nil
 	}
-	return fmt.Errorf("所有时间源均失败，最后错误: %w", lastErr)
+	switch offsetDecision(offset.Abs(), ec.MinOffset, ec.MaxOffset) {
+	case "skip":
+		logf("偏移 %s 小于阈值 %dms，跳过设置", offset.Abs().Round(time.Millisecond), ec.MinOffset)
+		writeStatusSafe(ec, src.label, offset, delay, true, "skipped(min-offset)")
+		return nil
+	case "reject":
+		msg := fmt.Sprintf("偏移 %s 超过大跳阈值 %dms，疑似异常源，拒绝设置", offset.Abs().Round(time.Millisecond), ec.MaxOffset)
+		logf("%s", msg)
+		writeStatusSafe(ec, src.label, offset, delay, false, "rejected(max-offset)")
+		return fmt.Errorf("%s", msg)
+	}
+	if err := setSystemTime(corrected); err != nil {
+		writeStatusSafe(ec, src.label, offset, delay, false, "set-failed: "+err.Error())
+		return fmt.Errorf("设置系统时间失败: %w", err)
+	}
+	logf("已同步系统时间 -> %s", corrected.Format("2006-01-02 15:04:05 MST"))
+	writeStatusSafe(ec, src.label, offset, delay, true, "synced")
+	return nil
 }
 
 func printUsage() {
@@ -226,14 +287,20 @@ func printUsage() {
   winTimeSync version                  查看版本
 
 通用参数:
+  -config string       配置文件路径（默认 同目录/winTimeSync.json），run 模式每次循环重读
   -source string       单源模式时间源: ntp | http（未指定 -chain 时生效，默认 ntp）
   -chain string        主备链：按顺序尝试，逗号分隔。每项 ntp:地址 或 http:地址
   -ntp-server string   NTP 服务器（默认 pool.ntp.org:123）
   -http-url string     HTTP 时间地址（默认 http://127.0.0.1:8080/time）
   -interval int        同步间隔秒数（默认 3600）
   -timeout int         单次请求超时秒数（默认 5）
+  -strategy string     多源策略: fallback(顺序试错) | best(并发择优取最小延时)（默认 fallback）
+  -min-offset int      偏移阈值(ms)：绝对值小于该值则跳过设置（默认 0=不限制）
+  -max-offset int      大跳保护(ms)：绝对值大于该值视为异常源，拒绝设置并尝试下一个（默认 0=不限制）
   -check               仅检查偏差，不修改系统时间
-  -quiet               安静模式，仅输出错误
+  -log string          日志文件路径；启用后日志追加写入该文件
+  -status-file string  同步状态文件路径（默认 同目录/winTimeSync.status.json）
+  -quiet               安静模式，仅输出错误（日志文件仍记录）
 
 server 模式参数:
   -server-addr string       HTTP 时间服务器监听地址（默认 :8080）
@@ -249,17 +316,20 @@ server 模式参数:
   # 主备：主用 NTP，备用 HTTP
   winTimeSync run -chain "ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time" -interval 60
 
-  # 主备：NTP A 主，NTP B/C 备
-  winTimeSync run -chain "ntp:time1.aliyun.com:123,ntp:time2.aliyun.com:123,ntp:time.windows.com:123" -interval 300
+  # 多上游择优（best）：并发请求全部，取最小延时
+  winTimeSync run -strategy best -chain "ntp:time1.aliyun.com:123,ntp:time2.aliyun.com:123,http:http://10.0.0.1/time" -interval 60
+
+  # 大跳保护：偏移超过 1 小时视为异常源拒绝
+  winTimeSync run -chain "ntp:pool.ntp.org:123" -max-offset 3600000
+
+  # 配置文件驱动（改 winTimeSync.json 即生效，无需重启/重装开机任务）
+  winTimeSync run -config winTimeSync.json
 
   # A 机：同时作为 NTP(123) + HTTP 时间源，并后台用 NTP 自校准（需管理员，且 123 端口未被占用）
   winTimeSync server -server-addr :8080 -server-ntp-port 123
 
   # B 机：用 NTP 同步 A（假设 A 的 IP 为 192.168.1.10）
   winTimeSync run -source ntp -ntp-server 192.168.1.10:123 -interval 60
-
-  # B 机主备：主用 A 的 NTP，备用 A 的 HTTP
-  winTimeSync run -chain "ntp:192.168.1.10:123,http:http://192.168.1.10:8080/time" -interval 60
 
   winTimeSync once -chain "ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time" -check
   winTimeSync install -chain "ntp:pool.ntp.org:123,http:http://127.0.0.1:8080/time" -interval 60   （请以管理员身份运行）
